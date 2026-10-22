@@ -1,5 +1,7 @@
 # herdr
 
+> This is a fork that adds an Android build, tested in Termux. Upstream herdr does not support Android. See the [`android-termux` branch](https://github.com/theKAOSSphere/herdr-android/tree/android-termux) and its `README.org` for the changes and build steps.
+
 
 <p align="center">
   <img src="assets/logo.png" alt="herdr" width="100" />
