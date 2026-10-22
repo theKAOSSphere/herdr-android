@@ -1,0 +1,37 @@
+#+TITLE: herdr for Android
+#+AUTHOR: theKAOSSphere
+#+DESCRIPTION: An Android build of herdr for aarch64, tested on a Galaxy Tab S6 Lite in Termux. Android is not a supported platform upstream.
+#+OPTIONS: toc:2
+
+* What this branch is
+This branch adds the changes needed to cross-compile herdr for =aarch64-linux-android=. Upstream herdr does not support Android. These changes make the build succeed and the binary start in Termux. They do not add Android support.
+
+* Changes
+- =crates/ghostty-vt/build.rs=: adds an Android entry to the Zig target map.
+- =src/platform/mod.rs=: Android uses the Linux platform backend.
+- =src/platform/linux.rs=: host power and shutdown monitors are no-op stubs on Android, since Android has no system D-Bus.
+
+* Build
+The full steps are in [[file:android/herdr-termux-android-compilation.org][the build guide]]. In short, you need Rust 1.96.1 with the Android target, the Android NDK r27c, and Zig 0.16.0. Then:
+
+#+BEGIN_SRC sh
+rustup target add aarch64-linux-android --toolchain 1.96.1
+export ZIG=/path/to/zig
+export NDK_BIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
+export CC_aarch64_linux_android=$NDK_BIN/aarch64-linux-android24-clang
+export AR_aarch64_linux_android=$NDK_BIN/llvm-ar
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$CC_aarch64_linux_android
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_AR=$AR_aarch64_linux_android
+cargo build --release --target aarch64-linux-android
+#+END_SRC
+
+To apply the same changes to your own checkout instead, run =git apply android/herdr-android.patch=.
+
+* Status
+- The build passes from a fresh clone with no errors.
+- The binary starts in Termux on a Galaxy Tab S6 Lite, and remote attach with =herdr --remote= works.
+- Not tested: PTY behavior under Termux, process detection through =/proc=, socket paths, agent detection, and app backgrounding.
+- Host power and shutdown events are ignored on Android.
+
+* Upstream
+This branch is based on [[https://github.com/herdrdev/herdr][herdrdev/herdr]]. The upstream license applies.

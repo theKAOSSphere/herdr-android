@@ -52,7 +52,11 @@ impl Drop for HostPowerMonitor {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(
+    any(target_os = "linux", target_os = "android"),
+    target_os = "macos",
+    windows
+)))]
 fn monitor_host_power(
     _sender: tokio::sync::mpsc::UnboundedSender<HostPowerEvent>,
 ) -> Option<tokio::task::JoinHandle<()>> {
@@ -122,7 +126,7 @@ impl HostShutdownIntentCell {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(any(target_os = "linux", target_os = "android"), target_os = "macos")))]
 fn monitor_host_shutdown(
     _requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
     _intent: HostShutdownIntentCell,
@@ -231,7 +235,7 @@ pub(crate) fn classify_child_exit(_status: &portable_pty::ExitStatus) -> ChildEx
     ChildExitReason::Exited
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 pub(crate) fn launch_executable() -> std::io::Result<std::path::PathBuf> {
     std::env::current_exe()
 }
@@ -394,7 +398,7 @@ pub(crate) fn prepare_server_process(_handoff_import: bool) -> std::io::Result<b
     Ok(false)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(any(target_os = "linux", target_os = "android"), target_os = "macos"))]
 pub fn detach_server_daemon_command(command: &mut std::process::Command) {
     use std::os::unix::process::CommandExt;
 
@@ -411,7 +415,7 @@ pub fn detach_server_daemon_command(command: &mut std::process::Command) {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(any(target_os = "linux", target_os = "android"), target_os = "macos"))]
 pub fn current_process_is_detached_server_daemon() -> bool {
     unsafe { libc::getsid(0) == libc::getpid() }
 }
@@ -519,8 +523,10 @@ pub(crate) struct RemoteSshConfigPaths {
     pub(crate) multiplexing: bool,
 }
 
-pub(crate) const REMOTE_BRIDGE_IDLE_TIMEOUT_SUPPORTED: bool =
-    cfg!(any(target_os = "linux", target_os = "macos"));
+pub(crate) const REMOTE_BRIDGE_IDLE_TIMEOUT_SUPPORTED: bool = cfg!(any(
+    any(target_os = "linux", target_os = "android"),
+    target_os = "macos"
+));
 
 #[cfg(unix)]
 mod remote_bridge;
@@ -561,9 +567,9 @@ pub(crate) fn begin_cli_output() {}
 #[cfg(not(unix))]
 pub(crate) fn end_cli_output() {}
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod linux;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub use linux::*;
 
 #[cfg(target_os = "macos")]
@@ -579,12 +585,20 @@ pub use windows::*;
 #[cfg(not(windows))]
 pub(crate) use process_cwd as pane_process_cwd;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(
+    any(target_os = "linux", target_os = "android"),
+    target_os = "macos",
+    target_os = "windows"
+)))]
 mod fallback;
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(
+    any(target_os = "linux", target_os = "android"),
+    target_os = "macos",
+    target_os = "windows"
+)))]
 pub use fallback::*;
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(any(target_os = "linux", target_os = "android"), target_os = "macos"))]
 pub(crate) fn available_pane_shell_from_job(child_pid: u32, job: ForegroundJob) -> Option<String> {
     if job.process_group_id != child_pid
         || job.processes.iter().any(|process| process.pid != child_pid)
@@ -607,7 +621,7 @@ fn normalized_process_name(name: &str) -> String {
         .to_ascii_lowercase()
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(any(target_os = "linux", target_os = "android"), target_os = "macos"))]
 pub(crate) fn is_powershell_process_name(name: &str) -> bool {
     matches!(
         normalized_process_name(name).as_str(),
@@ -615,7 +629,7 @@ pub(crate) fn is_powershell_process_name(name: &str) -> bool {
     )
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(any(target_os = "linux", target_os = "android"), target_os = "macos"))]
 pub(crate) fn interactive_unix_shell_command(
     argv: &[String],
     shell_name: &str,
@@ -698,12 +712,12 @@ pub(crate) fn is_pane_shell_process_name(name: &str) -> bool {
     )
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(any(target_os = "linux", target_os = "android"), target_os = "macos")))]
 pub fn process_agent_hint(_pid: u32) -> Option<crate::detect::Agent> {
     None
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(any(target_os = "linux", target_os = "android"), target_os = "macos"))]
 pub(crate) fn parse_agent_env_hint(environ: &[u8]) -> Option<crate::detect::Agent> {
     for record in environ.split(|&byte| byte == 0) {
         let Some(value) = record.strip_prefix(b"HERDR_AGENT=") else {
@@ -786,7 +800,7 @@ fn child_exit_classification_only_checkpoints_interruptions() {
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn live_pane_process_group_rejects_processes_outside_the_pane_session() {
         use std::os::unix::process::CommandExt;
@@ -820,7 +834,7 @@ mod tests {
         let _ = detached.wait();
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(any(target_os = "linux", target_os = "android"), target_os = "macos"))]
     #[test]
     fn live_pane_process_group_follows_the_agent_process_not_its_job() {
         use std::os::unix::process::CommandExt;
@@ -928,7 +942,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(any(target_os = "linux", target_os = "android"), target_os = "macos"))]
     #[test]
     fn parse_agent_env_hint_accepts_known_agents() {
         assert_eq!(
@@ -941,14 +955,14 @@ mod tests {
         );
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(any(target_os = "linux", target_os = "android"), target_os = "macos"))]
     #[test]
     fn parse_agent_env_hint_ignores_missing_or_unknown_agents() {
         assert_eq!(parse_agent_env_hint(b"PATH=/bin\0TERM=xterm\0"), None);
         assert_eq!(parse_agent_env_hint(b"HERDR_AGENT=not-an-agent\0"), None);
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(any(target_os = "linux", target_os = "android"), target_os = "macos"))]
     #[test]
     fn interactive_shell_command_quotes_for_posix_and_powershell() {
         let argv = vec![

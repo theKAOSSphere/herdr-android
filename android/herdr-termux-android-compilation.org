@@ -1,0 +1,188 @@
+#+TITLE: Building herdr for Android (Termux) from Source
+#+AUTHOR: theKAOSSphere
+#+DESCRIPTION: Cross-compiling herdr for aarch64 Android on an Ubuntu server, the three local patches it needed, and getting the binary onto a Galaxy Tab S6 Lite running Termux.
+#+OPTIONS: toc:2
+#+PROPERTY: header-args :sh
+
+* Introduction
+herdr does not ship an Android build. Its release binaries cover Linux (x86_64 and aarch64), macOS, and Windows. This document records how it was built for Android anyway: cross-compiled on an Ubuntu 26.04 server (=<build-host>=) for =aarch64-linux-android=, patched locally in three source files, and copied to a Galaxy Tab S6 Lite running Termux. The binary starts and opens. Runtime behavior beyond startup is untested.
+
+Native Linux builds follow the upstream instructions and are not covered here.
+
+* Environment
+- Build machine: =<build-host>=, Ubuntu 26.04.1 LTS, 16 cores, 22 GB RAM.
+- Tablet: Samsung Galaxy Tab S6 Lite (2020) with Termux. Storage access was granted with =termux-setup-storage=.
+- Rust: 1.96.1, pinned by herdr's =rust-toolchain.toml=.
+- Android NDK r27c (27.2.12479018), already installed under =~/Android/Sdk/ndk=.
+- Zig 0.16.0, required by the =ghostty-vt= build script.
+
+* What blocks a plain cross-compile
+Three things stop a standard cross-compile. Each one needed a fix.
+
+- =crates/ghostty-vt/build.rs= maps Rust target triples to Zig target strings through a =match= with no Android entry. Any Android target panics there.
+- =src/platform/mod.rs= picks a platform backend only for =target_os= values of linux, macos, and windows. Android falls through to a fallback module that has none of the Unix process and PTY functions.
+- The Linux backend in =src/platform/linux/= imports =zbus= and =futures_util=. Cargo declares those only for =target_os = "linux"=. Android has no system D-Bus, so the power and shutdown monitors have nothing to connect to.
+
+* Process
+** Step 1: Make a shallow clone
+#+BEGIN_SRC sh
+git clone --depth 1 https://github.com/herdrdev/herdr.git ~/herdr-android
+cd ~/herdr-android
+#+END_SRC
+A shallow clone keeps the download small. This clone is separate from any checkout with local edits, so the patches below never mix with someone else's work.
+
+** Step 2: Add the Android target to the pinned toolchain
+#+BEGIN_SRC sh
+rustup target add aarch64-linux-android --toolchain 1.96.1
+#+END_SRC
+Targets belong to a toolchain. Adding the target to the default =stable= toolchain does nothing for a repo that pins 1.96.1, and the build fails with =can't find crate for `core`=.
+
+An interrupted install can leave the component half-finished. Rustup then reports it as up to date while the libraries are missing. Remove the target and add it again:
+#+BEGIN_SRC sh
+rustup target remove aarch64-linux-android --toolchain 1.96.1
+rustup target add aarch64-linux-android --toolchain 1.96.1
+#+END_SRC
+
+** Step 3: Install Zig 0.16.0
+#+BEGIN_SRC sh
+mkdir -p ~/toolchains && cd ~/toolchains
+curl -sSLO https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
+tar xf zig-x86_64-linux-0.16.0.tar.xz
+~/toolchains/zig-x86_64-linux-0.16.0/zig version
+#+END_SRC
+The last command prints =0.16.0=.
+
+** Step 4: Add the Android entry to the Zig target map
+Zig uses the same string for the Android triple, so the mapping is one line:
+#+BEGIN_SRC sh
+cd ~/herdr-android
+sed -i 's/        "x86_64-unknown-linux-musl" => "x86_64-linux-musl",/        "aarch64-linux-android" => "aarch64-linux-android",\n&/' crates/ghostty-vt/build.rs
+grep -n android crates/ghostty-vt/build.rs
+#+END_SRC
+
+** Step 5: Point Cargo at the NDK linker
+The patch leaves =.cargo/config.toml= alone, since it's upstream's file and it holds a Windows target section. The NDK paths go in environment variables instead. They are set in step 8.
+
+API level 24 is the floor for Termux, which needs Android 7 or newer.
+
+** Step 6: Treat Android as Linux in the platform selector
+#+BEGIN_SRC sh
+sed -i 's/target_os = "linux"/any(target_os = "linux", target_os = "android")/g' src/platform/mod.rs
+#+END_SRC
+This changes 20 lines in =src/platform/mod.rs=. Android then uses the Linux backend, which provides the Unix process and PTY functions. The longer =cfg= lines then need formatting. Run =cargo fmt= after the sed, and =cargo fmt --check= should pass. The patch in this repo already includes the formatted result.
+
+** Step 7: Stub out the D-Bus monitors on Android
+In =src/platform/linux.rs=, find these four lines. They sit just below the =config_file_tests= module declaration:
+
+#+BEGIN_SRC rust
+mod shutdown;
+pub(crate) use shutdown::monitor_host_shutdown;
+mod power;
+pub(crate) use power::monitor_host_power;
+#+END_SRC
+
+Replace them with the block below. Linux keeps the real monitors. Android gets no-op stubs.
+
+#+BEGIN_SRC rust
+#[cfg(not(target_os = "android"))]
+mod shutdown;
+#[cfg(not(target_os = "android"))]
+pub(crate) use shutdown::monitor_host_shutdown;
+#[cfg(not(target_os = "android"))]
+mod power;
+#[cfg(not(target_os = "android"))]
+pub(crate) use power::monitor_host_power;
+
+// Android has no system D-Bus or logind, so host power and shutdown monitoring is a no-op.
+#[cfg(target_os = "android")]
+pub(crate) fn monitor_host_shutdown(
+    _requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    _intent: crate::platform::HostShutdownIntentCell,
+    _wake: impl Fn() + Send + Sync + 'static,
+) -> Option<tokio::task::JoinHandle<()>> {
+    None
+}
+
+#[cfg(target_os = "android")]
+pub(crate) fn monitor_host_power(
+    _sender: tokio::sync::mpsc::UnboundedSender<crate::platform::HostPowerEvent>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    None
+}
+#+END_SRC
+
+Cargo still declares =zbus= for Linux only. Nothing on Android refers to it, so the Android build never compiles it.
+
+** Step 8: Build
+Set the environment variables first. The linker and archiver come from the NDK, and Zig comes from step 3. The last two variables replace the =.cargo/config.toml= entries that step 5 used to write:
+#+BEGIN_SRC sh
+NDK=$HOME/Android/Sdk/ndk/27.2.12479018
+BIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
+export ZIG=$HOME/toolchains/zig-x86_64-linux-0.16.0/zig
+export CC_aarch64_linux_android=$BIN/aarch64-linux-android24-clang
+export AR_aarch64_linux_android=$BIN/llvm-ar
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$BIN/aarch64-linux-android24-clang
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_AR=$BIN/llvm-ar
+cargo build --release --target aarch64-linux-android
+#+END_SRC
+The build prints a warning about the external contributor policy. It comes from herdr's build script and does not stop the build.
+
+On the build host, a build that starts from an empty target directory took about two minutes in the verification run. Run it under =nohup= with output to a log file, so a dropped SSH session does not kill it.
+
+** Step 9: Check the binary
+#+BEGIN_SRC sh
+file target/aarch64-linux-android/release/herdr
+readelf -d target/aarch64-linux-android/release/herdr | grep NEEDED
+#+END_SRC
+The output should show an aarch64 ELF, the interpreter =/system/bin/linker64=, "for Android 24", and =NEEDED= entries for =libdl.so=, =libm.so=, and =libc.so=. These are all Android system libraries, so the binary needs nothing extra on the tablet. The binary was about 27 MB.
+
+* Getting the binary onto the tablet
+** adb (not used)
+adb needs a USB cable and USB debugging. The tablet was not connected to the build host or to the Windows machine, so it was not an option at the time.
+
+** Taildrop
+Taildrop worked from the Windows machine. Running it from the build host failed. Tailscale reported =peer is owned by a different user=, because the build host is a tagged device in the tailnet. The Windows machine shares an owner with the tablet, so this command succeeded with exit code 0:
+#+BEGIN_SRC sh
+tailscale file cp herdr-aarch64-android <tablet>:
+#+END_SRC
+Run it from the Windows machine. The file arrives in the Tailscale app on the tablet. Tap it and choose to save it. Saving to Downloads is the usual default.
+
+** Install in Termux
+#+BEGIN_SRC sh
+termux-setup-storage
+cp ~/storage/downloads/taildrop/herdr-aarch64-android $PREFIX/bin/herdr
+chmod +x $PREFIX/bin/herdr
+herdr --version
+#+END_SRC
+=$PREFIX= is Termux's own root directory, usually =/data/data/com.termux/files/usr=. Copy the binary into =$PREFIX/bin= instead of running it from shared storage, because Android can block executing files from that location. Putting it in =$PREFIX/bin= also puts it on the shell's =PATH=.
+
+* Using it: attach to a remote server
+#+BEGIN_SRC sh
+herdr --remote user@server
+herdr --remote user@server --session agents
+herdr --remote user@server --remote-keybindings server
+herdr --remote ssh://user@server:22 --session agents --remote-keybindings server
+#+END_SRC
+The docs (=persistence-remote.mdx=) say the attach uses the local herdr keybindings by default. The server's keybindings apply only with =--remote-keybindings server=. Local custom command keybindings are never sent to the server, since they would run on the remote host.
+
+The server needs a compatible herdr binary on its =PATH= or in =~/.local/bin=. In an interactive run, herdr offers to install one if it's missing. Press =ctrl+b= then =q= to detach. The panes keep running on the server.
+
+* Troubleshooting
+- =can't find crate for `core`= or =`std`=: the target is on the wrong toolchain, or an earlier install was interrupted. See step 2.
+- =unsupported target for libghostty-vt build: aarch64-linux-android=: step 4 is missing.
+- =unresolved import `futures_util`= or =cannot find module or crate `zbus`=: steps 6 and 7 are missing.
+- =cannot find function ... in module crate::platform=: step 6 is missing.
+- A command like =pkill -f "cargo build"= killed the SSH session itself, because the pattern matched the SSH command line. Use =pkill -x cargo= or =pgrep -x cargo= instead.
+
+* Limits
+- The patches exist only in the clone at =~/herdr-android= on the build host. A fresh clone of upstream does not have them, and they are not in the checkout that has local edits.
+- herdr does not list Android as a supported platform. The three patched files make it compile and start. They don't add Android support.
+- Verified: the build succeeds, the binary is a valid aarch64 Android executable, it transfers, and it starts on the tablet.
+- Not verified: PTY behavior under Termux, process detection through =/proc=, socket paths, agent detection, and what happens when the screen turns off or the app is backgrounded.
+- Host power and shutdown monitoring is disabled on Android, so herdr does not react to host power events there.
+
+* Summary
+- Target: =aarch64-linux-android=, API level 24.
+- Toolchains: Rust 1.96.1 with the Android target added, NDK r27c, Zig 0.16.0.
+- Patched files: =crates/ghostty-vt/build.rs=, =src/platform/mod.rs=, and =src/platform/linux.rs=. The NDK linker comes from environment variables, so no config file is changed.
+- Result: an aarch64 Android binary of about 27 MB that links only against Android system libraries.

@@ -26,10 +26,31 @@ pub(crate) use super::unix_common::{
 #[cfg(test)]
 mod config_file_tests;
 
+#[cfg(not(target_os = "android"))]
 mod shutdown;
+#[cfg(not(target_os = "android"))]
 pub(crate) use shutdown::monitor_host_shutdown;
+#[cfg(not(target_os = "android"))]
 mod power;
+#[cfg(not(target_os = "android"))]
 pub(crate) use power::monitor_host_power;
+
+// Android has no system D-Bus or logind, so host power and shutdown monitoring is a no-op.
+#[cfg(target_os = "android")]
+pub(crate) fn monitor_host_shutdown(
+    _requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    _intent: crate::platform::HostShutdownIntentCell,
+    _wake: impl Fn() + Send + Sync + 'static,
+) -> Option<tokio::task::JoinHandle<()>> {
+    None
+}
+
+#[cfg(target_os = "android")]
+pub(crate) fn monitor_host_power(
+    _sender: tokio::sync::mpsc::UnboundedSender<crate::platform::HostPowerEvent>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    None
+}
 
 const WSL_MARKER_ENV_VARS: &[&str] = &["WSL_DISTRO_NAME", "WSL_INTEROP"];
 const PROCESS_DETECTION_ENV_VAR: &str = "HERDR_PROCESS_DETECTION";

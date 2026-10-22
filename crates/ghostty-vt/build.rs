@@ -7,6 +7,7 @@ fn zig_target(target: &str) -> &str {
     match target {
         "x86_64-unknown-linux-gnu" => "x86_64-linux-gnu",
         "aarch64-unknown-linux-gnu" => "aarch64-linux-gnu",
+        "aarch64-linux-android" => "aarch64-linux-android",
         "x86_64-unknown-linux-musl" => "x86_64-linux-musl",
         "aarch64-unknown-linux-musl" => "aarch64-linux-musl",
         "x86_64-apple-darwin" => "x86_64-macos",
